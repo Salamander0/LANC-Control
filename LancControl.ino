@@ -1,20 +1,21 @@
-int PinLANC = 3;                // 5V limited input signal from LANC data
-int PinCMD = 2;                 // Command to send to LANC
-int PinLEDRecord = 4;           // Will be ON when recording
-int PinLEDActivity = 5;         // Will be ON anytime there is status different than STOP
-int PinSWRecord = 6;
+int PinLANC = 3;                // vstupni signal LANC data
+int PinCMD = 2;                 // vystupni signal LANC data
+int PinLEDRecord = 4;           // LED pro nahravani
+int PinLEDActivity = 5;         // LED pro standby
+int PinSWRecord = 6;            // tlacitko REC/STOP
 
-int FrameDuration = 94;       //ms
+int FrameDuration = 94;         // delka jednoho ramce pro synchronizaci
 
-//Commands to send to camera (note this is not the same value as coded received on status)
 const int eSTOP = 0x5E;
-const int eSTART = 0x05;
 const int eREC  = 0x33;
+const int sSTOP = 0x14;
+const int sREC = 0x04;
 
-int eCommand;                   //Current LANC command to send to video camera
-int nDetectedStatus;            //Status returned by LANC bus
-int nCommandTimes;             //LANC requires at least 5 times to repeat the command to video camera. This will count that.
-bool KeepAlive;                //counter for sending keepalive packet
+
+int eCommand;                   // prikaz pro odeslani do kamery
+int nDetectedStatus;            // detekovany status kamery
+int nCommandTimes;              // pocet zbyvajicich prikazu k zopakovani
+bool KeepAlive;                 // indikator KeepAlive packetu
 
 void setup(){   
   pinMode(PinLANC, INPUT);
@@ -24,15 +25,17 @@ void setup(){
 
   pinMode(PinSWRecord,INPUT);
   digitalWrite(PinSWRecord,HIGH);
+  
+  KeepAlive=false;
 }
 
 void FlashLED(){
     switch(nDetectedStatus){
-    case 0x14: //stop
+    case sSTOP: //stop
       digitalWrite(PinLEDActivity,HIGH);
       digitalWrite(PinLEDRecord,LOW);
       break;
-    case 0x04: //REC
+    case sREC: //REC
       digitalWrite(PinLEDActivity,LOW);
       digitalWrite(PinLEDRecord,HIGH);
       break;
@@ -56,8 +59,6 @@ void AfterLongGap(){
     if (nInd==150)
       bLongEnough=true;
   }
-
-  //Now wait till we get the first start bit (low)
   while (digitalRead(PinLANC)==HIGH)   delayMicroseconds(25);
 }
 
@@ -87,13 +88,13 @@ void SendCommand(unsigned char nCommand){
   digitalWrite(PinCMD,(nCommand  & 0x80) >> 7);
 
   delayMicroseconds(FrameDuration); 
-  digitalWrite(PinCMD,LOW); //free the LANC bus after writting the whole command
+  digitalWrite(PinCMD,LOW);
 }
 
 byte GetNextByte(){
   unsigned char nByte=0;
 
-  delayMicroseconds(FrameDuration + 15); //ignore start bit
+  delayMicroseconds(FrameDuration + 15);
   nByte|= digitalRead(PinLANC);
 
   delayMicroseconds(FrameDuration + 15); 
@@ -117,47 +118,42 @@ byte GetNextByte(){
   delayMicroseconds(FrameDuration + 15); 
   nByte|= digitalRead(PinLANC) << 7;
 
-  nByte = nByte ^ 255;  //invert bits, we got LANC LOWs for logic HIGHs
+  nByte = nByte ^ 255;
 
   return nByte;
 }
 
 void NextStartBit(){
   for(;;){
-    //this will look for the first LOW signal with abou 5uS precission
     while (digitalRead(PinLANC)==HIGH)
       delayMicroseconds(10); 
-
-    //And this guarantees it was actually a LOW, to ignore glitches and noise
-    delayMicroseconds(10);
     if (digitalRead(PinLANC)==LOW) 
       break;
   }
 }
 
 int IsSwitchEnabled(int nPin){
-  if (digitalRead(nPin)==LOW){
-    delayMicroseconds(100);
-    int time = millis();
-    while(digitalRead(nPin)==LOW){
-      if((millis() - time) >= 2000){
-       nCommandTimes=0; //Push button status change, so think on send command now
+  if (digitalRead(nPin) == LOW){
+  unsigned long time = millis();
+   delay(200); //debounce
+   // check if the switch is pressed for longer than 1 second.
+    if(digitalRead(nPin) == LOW && (millis() - time > 2000 UL)) 
+     {
        return 2;
-     }
-   
-    }     
-      nCommandTimes=0;
-      return 1; 
-  }
-  return 0;
+     } else
+     return 1; 
+    }
+    return 0;
 }
 
 void GetCommand(){
   switch(IsSwitchEnabled(PinSWRecord)){
     case 1:
+      nCommandTimes=0;
       eCommand=eREC;
       break;
     case 2:
+      nCommandTimes=0;
       eCommand=eSTOP;
       break;
     default:
@@ -165,17 +161,16 @@ void GetCommand(){
   }
 }
 
-void loop()                     // run over and over again
+void loop()                    
 {
   byte LANC_Frame[8];
   byte nByte;
   int nInd;
-  KeepAlive=false;
   int StartFrame=2;
   int Counter=0;
 
   for(;;){
-    if(nCommandTimes >= 8)GetCommand();         //get button press
+    if(nCommandTimes >= 8)GetCommand();
     AfterLongGap();       //sync
 
     if (nCommandTimes<8){
@@ -222,7 +217,6 @@ void loop()                     // run over and over again
         }
     }    
     
-    //Get next 6 bytes remaining
     for (nInd=StartFrame; nInd<8; nInd++){
       NextStartBit();
  
